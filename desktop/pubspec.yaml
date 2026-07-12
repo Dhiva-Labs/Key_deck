@@ -1,0 +1,27 @@
+name: keydeck_desktop
+description: "A new Flutter project."
+publish_to: 'none'
+version: 0.1.0+1
+
+environment:
+  sdk: ^3.12.2
+
+dependencies:
+  ffi: ^2.2.0
+  file_selector: ^1.1.0
+  flutter:
+    sdk: flutter
+  image: ^4.8.0
+  keydeck_protocol:
+    path: ../protocol
+  path_provider: ^2.1.6
+  qr_flutter: ^4.1.0
+  universal_ble: ^2.1.0
+
+dev_dependencies:
+  flutter_test:
+    sdk: flutter
+  flutter_lints: ^6.0.0
+
+flutter:
+  uses-material-design: true
