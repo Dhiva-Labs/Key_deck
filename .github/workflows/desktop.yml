@@ -1,0 +1,400 @@
+name: Desktop builds
+
+# Builds, tests and packages the Linux and Windows desktop host (desktop/) for
+# x64 and arm64, each on a native runner: Flutter cannot cross-compile either
+# desktop target, so every architecture is built on a machine of that
+# architecture. The phone app (mobile/) is not built here.
+#
+# Every run keeps the packages as workflow artifacts. When a GitHub release is
+# published, the release job attaches the packages of both architectures to it
+# and skips every asset the release already has, so the hand-built x64 .deb
+# and the APK stay as they are.
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+  release:
+    types: [published]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event_name }}-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+env:
+  # The Flutter release KeyDeck is developed with (desktop/.metadata). There
+  # are no Flutter SDK archives for linux-arm64 or windows-arm64, so every leg
+  # installs the SDK the same way: a shallow clone of the release tag.
+  FLUTTER_VERSION: '3.44.6'
+
+jobs:
+  linux:
+    name: Linux ${{ matrix.arch }}
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 45
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - arch: x64
+            deb_arch: amd64
+            runner: ubuntu-24.04
+            elf_machine: x86-64
+          - arch: arm64
+            deb_arch: arm64
+            runner: ubuntu-24.04-arm
+            elf_machine: ARM aarch64
+    defaults:
+      run:
+        working-directory: desktop
+    env:
+      BUNDLE: build/linux/${{ matrix.arch }}/release/bundle
+      ELF_MACHINE: ${{ matrix.elf_machine }}
+    steps:
+      - uses: actions/checkout@v7
+
+      # xvfb, xauth, xdotool, dbus-x11: the smoke run of the installed .deb.
+      - name: Install build dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            clang cmake ninja-build pkg-config \
+            libgtk-3-dev liblzma-dev libstdc++-12-dev \
+            file xvfb xauth xdotool dbus-x11
+
+      - name: Install Flutter ${{ env.FLUTTER_VERSION }}
+        run: |
+          git clone --depth 1 --branch "$FLUTTER_VERSION" \
+            https://github.com/flutter/flutter.git "$RUNNER_TEMP/flutter"
+          echo "$RUNNER_TEMP/flutter/bin" >> "$GITHUB_PATH"
+
+      - name: Configure Flutter
+        run: |
+          uname -m
+          flutter config --no-analytics --enable-linux-desktop
+          flutter precache --linux
+          flutter --version
+          dart --version
+
+      - name: Get packages
+        run: flutter pub get
+
+      - name: Test the protocol package
+        working-directory: protocol
+        run: |
+          dart pub get
+          dart test
+
+      - name: Test
+        run: flutter test
+
+      - name: Build release
+        run: flutter build linux --release
+
+      - name: Assert every ELF file in the bundle is ${{ matrix.elf_machine }}
+        run: |
+          for f in keydeck_desktop lib/libapp.so lib/libflutter_linux_gtk.so; do
+            [ -f "$BUNDLE/$f" ] || { echo "::error::missing $BUNDLE/$f"; exit 1; }
+          done
+          checked=0
+          bad=0
+          while IFS= read -r -d '' f; do
+            desc="$(file -b "$f")"
+            case "$desc" in ELF*) ;; *) continue ;; esac
+            echo "$f: $desc"
+            checked=$((checked + 1))
+            case "$desc" in
+              *"$ELF_MACHINE"*) ;;
+              *) echo "::error file=$f::not $ELF_MACHINE"; bad=1 ;;
+            esac
+          done < <(find "$BUNDLE" -type f -print0)
+          echo "checked $checked ELF files"
+          [ "$checked" -ge 3 ] && [ "$bad" -eq 0 ]
+
+      - name: Package tarball and .deb
+        run: |
+          tool/build_tarball.sh dist
+          tool/build_deb.sh dist
+
+      - name: Check the packages
+        run: |
+          VERSION="$(grep '^version:' pubspec.yaml | awk '{print $2}' | cut -d+ -f1)"
+          TARBALL="dist/KeyDeck-${VERSION}-linux-${{ matrix.arch }}.tar.gz"
+          DEB="dist/keydeck_${VERSION}_${{ matrix.deb_arch }}.deb"
+          ls -l dist
+          [ "$(ls dist | wc -l)" -eq 2 ]
+          tar -xzf "$TARBALL" -C "$RUNNER_TEMP"
+          file "$RUNNER_TEMP/KeyDeck-${VERSION}-linux-${{ matrix.arch }}/keydeck_desktop" | grep "$ELF_MACHINE"
+          dpkg-deb --info "$DEB"
+          [ "$(dpkg-deb --field "$DEB" Architecture)" = "${{ matrix.deb_arch }}" ]
+          sudo apt-get install -y "./$DEB"
+          file /usr/lib/keydeck/keydeck_desktop | grep "$ELF_MACHINE"
+
+      # Starts the installed app under Xvfb. The GTK runner shows its window
+      # only when Flutter has rendered the first frame, so a visible "KeyDeck"
+      # window means the AOT snapshot ran on this architecture. Dart's
+      # PadServer then listens on a TCP port, which is checked as well.
+      - name: Smoke-run the installed app (Xvfb)
+        timeout-minutes: 5
+        run: |
+          cat > "$RUNNER_TEMP/smoke.sh" <<'EOF'
+          log="$RUNNER_TEMP/smoke.log"
+          keydeck > "$log" 2>&1 &
+          pid=$!
+          for i in $(seq 1 90); do
+            if xdotool search --onlyvisible --name '^KeyDeck$' > /dev/null 2>&1 \
+              && ss -ltnp 2> /dev/null | grep -q "pid=$pid,"; then
+              echo "KeyDeck window is up and the PadServer listens, after ${i}s"
+              ss -ltnp | grep "pid=$pid," || true
+              sleep 5
+              kill -0 "$pid" || { echo "keydeck died after showing its window"; cat "$log"; exit 1; }
+              kill "$pid"
+              cat "$log"
+              exit 0
+            fi
+            kill -0 "$pid" 2> /dev/null || { echo "keydeck exited early"; cat "$log"; exit 1; }
+            sleep 1
+          done
+          echo "no visible KeyDeck window plus listening socket after 90s"
+          cat "$log"
+          exit 1
+          EOF
+          xvfb-run -a -s "-screen 0 1280x800x24" dbus-run-session -- bash "$RUNNER_TEMP/smoke.sh"
+
+      - uses: actions/upload-artifact@v7
+        with:
+          name: linux-${{ matrix.arch }}
+          path: |
+            desktop/dist/*.tar.gz
+            desktop/dist/*.deb
+          if-no-files-found: error
+
+  windows:
+    name: Windows ${{ matrix.arch }}
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 60
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - arch: x64
+            runner: windows-latest
+            pe_machine: '0x8664'
+            elf_machine: '0x3E'
+          - arch: arm64
+            runner: windows-11-arm
+            pe_machine: '0xAA64'
+            elf_machine: '0xB7'
+    defaults:
+      run:
+        shell: pwsh
+        working-directory: desktop
+    env:
+      ARCH: ${{ matrix.arch }}
+      RELEASE_DIR: build\windows\${{ matrix.arch }}\runner\Release
+      # PE COFF machine of every .exe/.dll, and ELF e_machine of the AOT
+      # snapshot (data\app.so is an ELF file on Windows too).
+      PE_MACHINE: ${{ matrix.pe_machine }}
+      ELF_MACHINE: ${{ matrix.elf_machine }}
+    steps:
+      - uses: actions/checkout@v7
+
+      # On an ARM64 host (PROCESSOR_ARCHITECTURE=ARM64) the bootstrap fetches
+      # the arm64 Dart SDK and `flutter build windows` targets windows-arm64.
+      - name: Install Flutter ${{ env.FLUTTER_VERSION }}
+        run: |
+          $PSNativeCommandUseErrorActionPreference = $true
+          git clone --depth 1 --branch $env:FLUTTER_VERSION `
+            https://github.com/flutter/flutter.git "$env:RUNNER_TEMP\flutter"
+          Add-Content -Path $env:GITHUB_PATH -Value "$env:RUNNER_TEMP\flutter\bin"
+
+      - name: Configure Flutter
+        run: |
+          $PSNativeCommandUseErrorActionPreference = $true
+          "PROCESSOR_ARCHITECTURE=$env:PROCESSOR_ARCHITECTURE"
+          flutter config --no-analytics --enable-windows-desktop
+          flutter precache --windows
+          flutter --version
+          dart --version
+
+      - name: Get packages
+        run: flutter pub get
+
+      - name: Test the protocol package
+        working-directory: protocol
+        run: |
+          $PSNativeCommandUseErrorActionPreference = $true
+          dart pub get
+          dart test
+
+      - name: Test
+        run: flutter test
+
+      - name: Build release
+        run: flutter build windows --release
+
+      - name: Assert every PE file is ${{ matrix.pe_machine }}
+        run: |
+          function Get-PeMachine([string]$Path) {
+            $fs = [IO.File]::OpenRead($Path)
+            try {
+              $br = New-Object IO.BinaryReader($fs)
+              $fs.Position = 0x3C
+              $fs.Position = $br.ReadInt32()
+              if ($br.ReadUInt32() -ne 0x4550) { throw "$Path is not a PE file" }
+              return $br.ReadUInt16()
+            } finally { $fs.Dispose() }
+          }
+          $expected = [Convert]::ToUInt16($env:PE_MACHINE, 16)
+          $files = Get-ChildItem -Path $env:RELEASE_DIR -Recurse -File -Include *.exe, *.dll
+          if (-not ($files.Name -contains 'keydeck_desktop.exe') -or -not ($files.Name -contains 'flutter_windows.dll')) {
+            throw "keydeck_desktop.exe or flutter_windows.dll missing from $env:RELEASE_DIR"
+          }
+          $bad = 0
+          foreach ($f in $files) {
+            $m = Get-PeMachine $f.FullName
+            '{0,-50} 0x{1:X4}' -f $f.Name, $m
+            if ($m -ne $expected) { Write-Host "::error file=$($f.FullName)::machine 0x$('{0:X4}' -f $m), expected $env:PE_MACHINE"; $bad++ }
+          }
+          $bytes = [IO.File]::ReadAllBytes("$env:RELEASE_DIR\data\app.so")
+          $elf = [BitConverter]::ToUInt16($bytes, 0x12)
+          'data\app.so ELF e_machine 0x{0:X2}' -f $elf
+          if ($elf -ne [Convert]::ToUInt16($env:ELF_MACHINE, 16)) { Write-Host "::error::app.so is not $env:ELF_MACHINE"; $bad++ }
+          "checked $($files.Count) PE files and app.so"
+          if ($bad) { exit 1 }
+
+      # The runner shows its window only when Flutter has rendered the first
+      # frame (MainWindowHandle is 0 until then), so a window means the AOT
+      # snapshot ran on this architecture. Dart's PadServer then listens on a
+      # TCP port owned by the process, which is checked as well.
+      - name: Smoke-run the release build
+        timeout-minutes: 5
+        run: |
+          $p = Start-Process -FilePath "$env:RELEASE_DIR\keydeck_desktop.exe" -PassThru
+          $up = $false
+          for ($i = 1; $i -le 90; $i++) {
+            Start-Sleep -Seconds 1
+            $p.Refresh()
+            if ($p.HasExited) { throw "keydeck_desktop.exe exited early with code $($p.ExitCode)" }
+            $listening = @(Get-NetTCPConnection -State Listen -OwningProcess $p.Id -ErrorAction SilentlyContinue)
+            if ($p.MainWindowHandle -ne 0 -and $listening.Count -gt 0) {
+              "window '$($p.MainWindowTitle)' is up after ${i}s; listening on port(s) $(($listening.LocalPort | Sort-Object -Unique) -join ', ')"
+              $up = $true
+              break
+            }
+          }
+          if (-not $up) {
+            Stop-Process -Id $p.Id -Force
+            throw "no window plus listening socket after 90 s (window handle $($p.MainWindowHandle))"
+          }
+          Start-Sleep -Seconds 5
+          $p.Refresh()
+          if ($p.HasExited) { throw "keydeck_desktop.exe died after showing its window (code $($p.ExitCode))" }
+          Stop-Process -Id $p.Id -Force
+
+      - name: Package zip
+        run: ./tool/package_windows.ps1 -OutDir dist
+
+      - name: Check the package
+        run: |
+          function Get-PeMachine([string]$Path) {
+            $fs = [IO.File]::OpenRead($Path)
+            try {
+              $br = New-Object IO.BinaryReader($fs)
+              $fs.Position = 0x3C
+              $fs.Position = $br.ReadInt32()
+              if ($br.ReadUInt32() -ne 0x4550) { throw "$Path is not a PE file" }
+              return $br.ReadUInt16()
+            } finally { $fs.Dispose() }
+          }
+          Add-Type -AssemblyName System.IO.Compression.FileSystem
+          $expected = [Convert]::ToUInt16($env:PE_MACHINE, 16)
+          $version = ((Select-String -Path pubspec.yaml -Pattern '^version:\s*(\S+)').Matches[0].Groups[1].Value -split '\+')[0]
+          $zipName = "KeyDeck-$version-windows-$env:ARCH"
+          Get-ChildItem dist | Format-Table Name, Length
+          if ((Get-ChildItem dist).Count -ne 1) { throw 'expected exactly one zip in dist' }
+          $zip = [IO.Compression.ZipFile]::OpenRead((Resolve-Path "dist\$zipName.zip"))
+          try {
+            $entry = $zip.GetEntry("$zipName/keydeck_desktop.exe")
+            if (-not $entry) { throw "$zipName/keydeck_desktop.exe not in the zip" }
+            $tmp = Join-Path $env:RUNNER_TEMP 'zip_keydeck_desktop.exe'
+            [IO.Compression.ZipFileExtensions]::ExtractToFile($entry, $tmp, $true)
+            $m = Get-PeMachine $tmp
+            'zip: {0} entries, keydeck_desktop.exe 0x{1:X4}' -f $zip.Entries.Count, $m
+            if ($m -ne $expected) { throw 'zip holds the wrong architecture' }
+          } finally { $zip.Dispose() }
+
+      - uses: actions/upload-artifact@v7
+        with:
+          name: windows-${{ matrix.arch }}
+          path: desktop/dist/*.zip
+          if-no-files-found: error
+
+  release:
+    name: Release assets
+    needs: [linux, windows]
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          sparse-checkout: desktop/pubspec.yaml
+          sparse-checkout-cone-mode: false
+
+      - uses: actions/download-artifact@v8
+        with:
+          pattern: '*-*'
+          path: assets
+          merge-multiple: true
+
+      # Every package the build legs made, x64 and arm64. Names that are
+      # already on the release win (see the upload step), so the hand-built
+      # keydeck_<version>_amd64.deb and the APK are never touched.
+      - name: Select the release assets
+        id: select
+        run: |
+          VERSION="$(grep '^version:' desktop/pubspec.yaml | awk '{print $2}' | cut -d+ -f1)"
+          FILES=""
+          for arch in x64 arm64; do
+            FILES="$FILES assets/KeyDeck-${VERSION}-linux-${arch}.tar.gz assets/KeyDeck-${VERSION}-windows-${arch}.zip"
+          done
+          FILES="$FILES assets/keydeck_${VERSION}_amd64.deb assets/keydeck_${VERSION}_arm64.deb"
+          ls -l assets
+          ls -l $FILES
+          echo "files=$FILES" >> "$GITHUB_OUTPUT"
+
+      # Skips an asset when the release already has it. A .deb counts as
+      # present when the release has a .deb of the same architecture under any
+      # version, because the hand-built one is named after the version it was
+      # built from (keydeck_0.2.0_amd64.deb), which need not match
+      # desktop/pubspec.yaml. Nothing is overwritten.
+      - name: Upload to release ${{ github.event.release.tag_name }}
+        if: github.event_name == 'release'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ github.event.release.tag_name }}
+          FILES: ${{ steps.select.outputs.files }}
+        run: |
+          existing="$(gh release view "$TAG" --repo "$GITHUB_REPOSITORY" --json assets --jq '.assets[].name')"
+          for f in $FILES; do
+            name="$(basename "$f")"
+            case "$name" in
+              keydeck_*_*.deb) pattern="keydeck_*_${name##*_}" ;;
+              *) pattern="$name" ;;
+            esac
+            present=""
+            while IFS= read -r asset; do
+              # shellcheck disable=SC2053
+              if [[ "$asset" == $pattern ]]; then present="$asset"; break; fi
+            done <<< "$existing"
+            if [ -n "$present" ]; then
+              echo "$name: the release already has $present, leaving it alone"
+            else
+              gh release upload "$TAG" "$f" --repo "$GITHUB_REPOSITORY"
+            fi
+          done
