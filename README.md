@@ -54,9 +54,9 @@ to a connected phone live.
 ### Download the desktop app
 
 The desktop host is built for Linux and Windows on both x64 and arm64. GitHub
-releases published after the CI workflow was added carry these files (the x64
-`.deb` is still attached by hand); every CI run also keeps all of them as
-workflow artifacts:
+releases from 0.2.1 on carry these files, attached by the CI workflow; every CI
+run also keeps all of them as workflow artifacts. The Android pad APK is
+attached to the release by hand:
 
 | Platform             | File                                                        |
 |----------------------|-------------------------------------------------------------|
