@@ -45,7 +45,7 @@ The `flatpak` job in `.github/workflows/desktop.yml`, on x86_64 and aarch64:
    that the pad server listens on 8737, and that its `which xdotool` ran on
    the host; then that `xdotool key ...` from the sandbox and a Command
    key's `flatpak-spawn --host /bin/sh -c ...` both run on the host (stub
-   tools on the container's PATH record the calls).
+   tools on the runner's PATH record the calls).
 
 A real key press is not sent: the phone authenticates with a per-launch
 token that only the on-screen QR code carries.

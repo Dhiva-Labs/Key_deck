@@ -1,17 +1,16 @@
 #!/usr/bin/env bash
-# Installs the Flatpak bundle the way a user does and runs KeyDeck in it.
-# CI runs this in the flatpak-builder container right after the build (the
-# GNOME runtime is already installed there from Flathub).
+# Installs the Flatpak bundle the way a user does and runs KeyDeck in it. CI
+# runs this on a plain Ubuntu runner (the flatpak-run job).
 #
 # usage: smoke.sh <bundle.flatpak>
 #
 #   1. `flatpak install --user` the bundle;
 #   2. ldd every ELF file under /app inside the sandbox: no "not found";
 #   3. under Xvfb, start the app. Flutter must draw the window (counted in
-#      Xvfb's framebuffer, where an empty screen has one colour; the
-#      container has no xdotool), the Dart pad server must listen on port
+#      Xvfb's framebuffer, where an empty screen has one colour), the
+#      Dart pad server must listen on port
 #      8737, and the app's lookup of its keystroke tool (`which xdotool`)
-#      must have run on the host: the container's PATH starts with stub
+#      must have run on the host: the host's PATH starts with stub
 #      `which` and `xdotool` scripts that log their calls, which only a
 #      process outside the sandbox can reach;
 #   4. the two other host paths the app uses: `xdotool key ...` through the
@@ -30,19 +29,12 @@ export XDG_RUNTIME_DIR="${XDG_RUNTIME_DIR:-/tmp/runtime-$(id -u)}"
 mkdir -p -m 0700 "$XDG_RUNTIME_DIR"
 
 echo "::group::flatpak install --user $(basename "$bundle")"
+# Flathub first: the bundle's runtime, and the GL extension (Mesa) that
+# Flutter draws with, install from there, as on a user's machine.
+flatpak remote-add --user --if-not-exists flathub https://dl.flathub.org/repo/flathub.flatpakrepo
 flatpak install --user -y --noninteractive "$bundle"
 flatpak info --user "$APP_ID"
 flatpak info --user --show-permissions "$APP_ID"
-# Flutter draws through OpenGL. A user's Flatpak installs the runtime's GL
-# extension (Mesa) from Flathub along with the runtime; the builder image
-# has the runtime without it, and the app then draws nothing ("No GL
-# implementation is available"). Install the branch the runtime asks for.
-runtime="$(flatpak info --user --show-runtime "$APP_ID")"
-gl="$(flatpak info --show-metadata "$runtime" |
-  sed -n '/^\[Extension org.freedesktop.Platform.GL\]/,/^\[/s/^versions=\([^;]*\).*/\1/p')"
-[ -n "$gl" ] || { echo "no GL extension version in $runtime's metadata" >&2; exit 1; }
-flatpak remote-add --user --if-not-exists flathub https://dl.flathub.org/repo/flathub.flatpakrepo
-flatpak install --user -y --noninteractive flathub "org.freedesktop.Platform.GL.default//$gl"
 echo "::endgroup::"
 
 echo "::group::ldd inside the sandbox"
@@ -93,7 +85,7 @@ if ! timeout 30 flatpak run --command=flatpak-spawn "$app_id" --host true; then
   for h in /usr/libexec/flatpak-session-helper /app/libexec/flatpak-session-helper; do
     if [ -x "$h" ]; then helper="$h"; break; fi
   done
-  [ -n "$helper" ] || { echo "no flatpak-session-helper in this container"; exit 1; }
+  [ -n "$helper" ] || { echo "no flatpak-session-helper on this host"; exit 1; }
   echo "starting $helper"
   "$helper" > "$fb/helper.log" 2>&1 &
   sleep 3
