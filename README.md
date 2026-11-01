@@ -3,6 +3,7 @@
 [![ARM64 builds](https://github.com/Dhiva-Labs/Key_deck/actions/workflows/desktop.yml/badge.svg?branch=main)](https://github.com/Dhiva-Labs/Key_deck/actions/workflows/desktop.yml)
 ![Linux x64 | arm64](https://img.shields.io/badge/Linux-x64%20%7C%20arm64-informational?logo=linux&logoColor=white)
 ![Windows x64 | arm64](https://img.shields.io/badge/Windows-x64%20%7C%20arm64-informational?logo=windows&logoColor=white)
+![Linux: deb | rpm | Arch | AppImage | Flatpak](https://img.shields.io/badge/Linux-deb%20%7C%20rpm%20%7C%20Arch%20%7C%20AppImage%20%7C%20Flatpak-informational?logo=linux&logoColor=white)
 
 Turn your phone into a programmable macro pad (a Stream Deck replacement) for
 your Ubuntu or Windows machine.
@@ -73,6 +74,40 @@ The tarball and zip hold the whole app folder: unpack and run `keydeck_desktop`
 (`keydeck_desktop.exe` on Windows). Keystroke injection still needs xdotool or
 ydotool on Linux.
 
+#### Other Linux distributions
+
+From the next release on, releases also carry packages for other
+distributions, built from the same binaries as the `.deb` (`x86_64` and
+`aarch64`):
+
+| Distribution | Asset | Install |
+|---|---|---|
+| Fedora, RHEL/Rocky/Alma | `keydeck-<version>-1.<arch>.rpm` | `sudo dnf install ./keydeck-<version>-1.<arch>.rpm` |
+| openSUSE Tumbleweed | `keydeck-<version>-1.<arch>.rpm` | `sudo zypper install --allow-unsigned-rpm ./keydeck-<version>-1.<arch>.rpm` |
+| Arch, Manjaro, EndeavourOS | `keydeck-<version>-1-<arch>.pkg.tar.zst` | `sudo pacman -U ./keydeck-<version>-1-<arch>.pkg.tar.zst` |
+| Any (AppImage) | `KeyDeck-<version>-<arch>.AppImage` | `chmod +x KeyDeck-<version>-<arch>.AppImage && ./KeyDeck-<version>-<arch>.AppImage` |
+| Any (Flatpak) | `keydeck-<version>-<arch>.flatpak` | `flatpak install --user ./keydeck-<version>-<arch>.flatpak` |
+
+- The binaries are built on Ubuntu 24.04, so they need glibc 2.39 or newer:
+  Fedora 40+, openSUSE Tumbleweed and current Arch, but not openSUSE Leap 15
+  or RHEL 9. The AppImage uses the system's GTK 3.
+- dnf and zypper install xdotool or ydotool with the `.rpm` (a weak
+  dependency, like the `.deb`'s Recommends); on Arch they are optional
+  dependencies: `sudo pacman -S xdotool` (X11) or `ydotool` (Wayland). The
+  AppImage and the Flatpak use whichever one the system has.
+- The `.rpm` files are unsigned (hence `--allow-unsigned-rpm` on openSUSE).
+- The Flatpak bundle uses the GNOME 51 runtime from Flathub: add the Flathub
+  remote first (`flatpak remote-add --user --if-not-exists flathub
+  https://dl.flathub.org/repo/flathub.flatpakrepo`). **It is not sandboxed
+  in practice**: typing keystrokes and running the commands you program
+  have to happen on your desktop, so it runs xdotool/ydotool and those
+  commands on the host through `flatpak-spawn --host`
+  (`--talk-name=org.freedesktop.Flatpak`). It also has network access (for
+  the phone) and Bluetooth (BlueZ). See
+  [packaging/flatpak/README.md](packaging/flatpak/README.md).
+- Arch users can build `keydeck-bin` from the AUR recipe attached to each
+  release (`keydeck-bin-<version>-aur.tar.gz`: PKGBUILD and .SRCINFO).
+
 ### Desktop (Ubuntu)
 
 ```bash
@@ -114,7 +149,10 @@ cd desktop && flutter test    # real WebSocket server handshake + auth
 GitHub Actions (`.github/workflows/desktop.yml`) runs both suites, builds the
 desktop app and starts it, on Linux x64, Linux arm64, Windows x64 and Windows
 arm64, each on a native runner. It also packages the `.deb`, tarball and zip
-listed above.
+listed above, and the packages for other distributions: the `.rpm` is
+installed and run on Fedora and openSUSE Tumbleweed, the Arch package on Arch
+Linux (x64; arm64 gets a static check, as there is no official Arch Linux ARM
+image), the AppImage on Fedora, and the Flatpak in its sandbox.
 
 ## Notes
 

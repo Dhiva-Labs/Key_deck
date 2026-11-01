@@ -1,1 +1,4 @@
 dist/
+
+# Installed tree the Flatpak CI job unpacks (packaging/flatpak/README.md).
+/packaging/flatpak/tree/

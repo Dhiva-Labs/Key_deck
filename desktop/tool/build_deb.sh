@@ -49,13 +49,21 @@ exec /usr/lib/keydeck/keydeck_desktop "$@"
 WRAPPER
 chmod 0755 "$PKG/usr/bin/keydeck"
 
+# The app icon in every size linux/icons/ has (the AppImage and the Flatpak
+# need a real icon file too, so all formats ship the same one).
+for png in linux/icons/keydeck-*.png; do
+  size="${png##*-}"
+  size="${size%.png}"
+  install -Dm644 "$png" "$PKG/usr/share/icons/hicolor/${size}x${size}/apps/keydeck.png"
+done
+
 cat > "$PKG/usr/share/applications/keydeck.desktop" <<'ENTRY'
 [Desktop Entry]
 Type=Application
 Name=KeyDeck
 Comment=Turn your phone into a programmable macro pad
 Exec=keydeck
-Icon=input-keyboard
+Icon=keydeck
 Terminal=false
 Categories=Utility;
 Keywords=macro;streamdeck;hotkey;keyboard;
