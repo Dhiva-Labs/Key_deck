@@ -1,0 +1,29 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<component type="desktop-application">
+  <id>dev.dhivalabs.keydeck_desktop</id>
+  <metadata_license>CC0-1.0</metadata_license>
+  <project_license>LicenseRef-proprietary</project_license>
+  <name>KeyDeck</name>
+  <summary>Phone macro pad host for the desktop</summary>
+  <description>
+    <p>KeyDeck turns a phone into a programmable macro pad. This is the
+    desktop host: it shows the pairing QR code, lets you program every key
+    and injects the keystrokes. Pair over WiFi or Bluetooth.</p>
+    <p>Keystroke injection needs xdotool (X11) or ydotool (Wayland) installed
+    on the system. KeyDeck runs them, and the commands you program, on the
+    host, outside the sandbox.</p>
+  </description>
+  <launchable type="desktop-id">dev.dhivalabs.keydeck_desktop.desktop</launchable>
+  <provides>
+    <binary>keydeck</binary>
+  </provides>
+  <url type="homepage">https://github.com/Dhiva-Labs/Key_deck</url>
+  <url type="bugtracker">https://github.com/Dhiva-Labs/Key_deck/issues</url>
+  <developer id="com.dhivalabs">
+    <name>Dhiva Labs</name>
+  </developer>
+  <content_rating type="oars-1.1"/>
+  <releases>
+    <release version="0.2.1" date="2026-10-16"/>
+  </releases>
+</component>

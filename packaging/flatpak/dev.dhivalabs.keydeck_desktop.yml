@@ -1,0 +1,60 @@
+# Flatpak manifest for KeyDeck, the desktop host.
+#
+# Like the .rpm, Arch package and AppImage, this repackages the installed
+# tree of the .deb that CI builds (unpacked into packaging/flatpak/tree/ by
+# the workflow), so the Flatpak ships the same binary as every other format
+# instead of a second build inside the sandbox. A Flathub submission needs
+# `tree` swapped for an archive source (release URL + sha256); see README.md
+# in this directory.
+#
+# KeyDeck's job is to act on the user's desktop: it types hotkeys and text
+# with the host's xdotool or ydotool and runs the user's commands. None of
+# that is possible from inside a sandbox, so this Flatpak reaches the host
+# through flatpak-spawn --host and is, by design, NOT a sandbox: it can run
+# anything the user can. README.md explains the trade-off.
+id: dev.dhivalabs.keydeck_desktop
+runtime: org.gnome.Platform
+runtime-version: '51'
+sdk: org.gnome.Sdk
+command: keydeck
+finish-args:
+  # GTK needs a display socket; fallback-x11 covers X11-only desktops.
+  - --socket=wayland
+  - --socket=fallback-x11
+  - --share=ipc
+  # GPU acceleration for Flutter's renderer.
+  - --device=dri
+  # The phone connects to the pad server (WebSocket on port 8737) over WiFi.
+  - --share=network
+  # Bluetooth pairing: the desktop is a BLE central through BlueZ.
+  - --system-talk-name=org.bluez
+  # flatpak-spawn --host: keystroke injection (xdotool/ydotool, found with
+  # `which`) and the "Command" key action run on the host (see above).
+  - --talk-name=org.freedesktop.Flatpak
+modules:
+  - name: keydeck
+    buildsystem: simple
+    sources:
+      - type: dir
+        path: tree
+        dest: tree
+      - type: file
+        path: host-tool.sh
+      - type: file
+        path: dev.dhivalabs.keydeck_desktop.metainfo.xml
+    build-commands:
+      # Flutter finds lib/ and data/ next to its executable.
+      - install -d /app/lib /app/bin
+      - cp -a tree/usr/lib/keydeck /app/lib/keydeck
+      - ln -s ../lib/keydeck/keydeck_desktop /app/bin/keydeck
+      # The app runs these by name; /app/bin comes first on PATH, so they
+      # resolve to the wrapper, which runs the host's copy.
+      - for tool in which xdotool ydotool; do install -Dm755 host-tool.sh /app/bin/$tool; done
+      # Flatpak exports only desktop files and icons named after the app id
+      # (which is also the GTK application id, so the window matches it).
+      - install -Dm644 tree/usr/share/applications/keydeck.desktop
+        /app/share/applications/dev.dhivalabs.keydeck_desktop.desktop
+      - desktop-file-edit --set-icon=dev.dhivalabs.keydeck_desktop /app/share/applications/dev.dhivalabs.keydeck_desktop.desktop
+      - for png in tree/usr/share/icons/hicolor/*/apps/keydeck.png; do size="${png#tree/usr/share/icons/hicolor/}";
+        install -Dm644 "$png" "/app/share/icons/hicolor/${size%%/*}/apps/dev.dhivalabs.keydeck_desktop.png"; done
+      - install -Dm644 dev.dhivalabs.keydeck_desktop.metainfo.xml /app/share/metainfo/dev.dhivalabs.keydeck_desktop.metainfo.xml
