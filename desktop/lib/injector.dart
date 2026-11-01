@@ -45,13 +45,22 @@ abstract class KeyInjector {
 
   Future<void> _runCommand(String command) async {
     if (command.trim().isEmpty) return;
-    if (Platform.isWindows) {
-      await Process.start('cmd', ['/c', command],
-          mode: ProcessStartMode.detached);
-    } else {
-      await Process.start('/bin/sh', ['-c', command],
-          mode: ProcessStartMode.detached);
-    }
+    final argv = commandLine(command,
+        windows: Platform.isWindows,
+        flatpak: File('/.flatpak-info').existsSync());
+    await Process.start(argv.first, argv.sublist(1),
+        mode: ProcessStartMode.detached);
+  }
+
+  /// The process that runs a key's shell [command]. Inside the Flatpak
+  /// sandbox `/bin/sh` is the runtime's and cannot start the user's apps or
+  /// scripts, so the command goes to the host through `flatpak-spawn
+  /// --host`, the way it runs from every other package.
+  static List<String> commandLine(String command,
+      {required bool windows, required bool flatpak}) {
+    if (windows) return ['cmd', '/c', command];
+    if (flatpak) return ['flatpak-spawn', '--host', '/bin/sh', '-c', command];
+    return ['/bin/sh', '-c', command];
   }
 
   static KeyInjector forThisPlatform() =>
